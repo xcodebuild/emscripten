@@ -195,7 +195,7 @@ def check_call(cmd, *args, **kw):
 def generate_config(path, first_time=False):
   # Note: repr is used to ensure the paths are escaped correctly on Windows.
   # The full string is replaced so that the template stays valid Python.
-  config_file = open(path_from_root('tools', 'settings_template_readonly.py')).read().splitlines()
+  config_file = open(path_from_root('tools', 'settings_template.py')).read().splitlines()
   config_file = config_file[3:] # remove the initial comment
   config_file = '\n'.join(config_file)
   # autodetect some default paths
@@ -299,7 +299,10 @@ FROZEN_CACHE = False
 
 
 def parse_config_file():
-  """Parse the emscripten config file using python's exec"""
+  """Parse the emscripten config file using python's exec.
+
+  Also also EM_<KEY> environment variables to override specific config keys.
+  """
   config = {}
   config_text = open(CONFIG_FILE, 'r').read() if CONFIG_FILE else EM_CONFIG
   try:
@@ -310,7 +313,7 @@ def parse_config_file():
   CONFIG_KEYS = (
     'NODE_JS',
     'BINARYEN_ROOT',
-    'EM_POPEN_WORKAROUND',
+    'POPEN_WORKAROUND',
     'SPIDERMONKEY_ENGINE',
     'EMSCRIPTEN_NATIVE_OPTIMIZER',
     'V8_ENGINE',
@@ -328,7 +331,11 @@ def parse_config_file():
 
   # Only popogate certain settings from the config file.
   for key in CONFIG_KEYS:
-    if key in config:
+    env_var = 'EM_' + key
+    env_value = os.environ.get(env_var)
+    if env_value is not None:
+      globals()[key] = env_value
+    elif key in config:
       globals()[key] = config[key]
 
 
@@ -362,9 +369,6 @@ NODE_JS = fix_js_engine(NODE_JS, listify(NODE_JS))
 V8_ENGINE = fix_js_engine(V8_ENGINE, listify(V8_ENGINE))
 COMPILER_ENGINE = listify(COMPILER_ENGINE)
 JS_ENGINES = [listify(engine) for engine in JS_ENGINES]
-
-if EM_POPEN_WORKAROUND is None:
-  EM_POPEN_WORKAROUND = os.environ.get('EM_POPEN_WORKAROUND')
 
 # Install our replacement Popen handler if we are running on Windows to avoid
 # python spawn process function.
@@ -938,8 +942,11 @@ def check_vanilla():
       return has_wasm_target(targets) and not has_asm_js_target(targets)
 
     def get_vanilla_file():
+      logger.debug('regenerating vanilla file: %s' % LLVM_ROOT)
       saved_file = os.path.join(temp_cache.dirname, 'is_vanilla.txt')
-      open(saved_file, 'w').write(('1' if check_vanilla() else '0') + ':' + LLVM_ROOT)
+      if os.path.exists(saved_file):
+        logger.debug('old: %s\n' % open(saved_file).read())
+      open(saved_file, 'w').write(('1' if check_vanilla() else '0') + ':' + LLVM_ROOT + '\n')
       return saved_file
 
     is_vanilla_file = temp_cache.get('is_vanilla.txt', get_vanilla_file)
@@ -947,12 +954,12 @@ def check_vanilla():
       logger.debug('config file changed since we checked vanilla; re-checking')
       is_vanilla_file = temp_cache.get('is_vanilla.txt', get_vanilla_file, force=True)
     try:
-      contents = open(is_vanilla_file).read()
+      contents = open(is_vanilla_file).read().strip()
       middle = contents.index(':')
       is_vanilla = int(contents[:middle])
       llvm_used = contents[middle + 1:]
       if llvm_used != LLVM_ROOT:
-        logger.debug('regenerating vanilla check since other llvm')
+        logger.debug('regenerating vanilla check since other llvm (%s vs %s)`', llvm_used, LLVM_ROOT)
         temp_cache.get('is_vanilla.txt', get_vanilla_file, force=True)
         is_vanilla = check_vanilla()
     except Exception as e:
